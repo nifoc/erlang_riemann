@@ -1,70 +1,78 @@
-.PHONY: deps
+DEPS = $(CURDIR)/deps
 
-all: deps compile
+DIALYZER_OPTS = -Wunmatched_returns -Werror_handling -Wrace_conditions
 
-compile:
-	@./rebar compile
+# List dependencies that should be included in a cached dialyzer PLT file.
+DIALYZER_DEPS = deps/*/ebin
 
-deps:
-	@./rebar get-deps
+DEPS_PLT = .erlang_riemann.plt
 
-clean:
-	@./rebar clean
-
-app:
-	@./rebar compile skip_deps=true
-
-test: all
-	@./rebar skip_deps=true eunit
-
-#################
-# Starting dummy node
-# NOTE: This is not for production! 
-# 		Use /rel/erlattest/bin/erlattest start instead
-
-NODE_START=exec erl -pa $(PWD)/ebin -pa $(PWD)/deps/*/ebin -boot start_sasl -s riemann -config $(PWD)/app.config -smp enabled
-
-start: app
-	$(NODE_START) 
-
-#################
-# Analysis
-
-DIALYZER_OPTS = -Wrace_conditions -Werror_handling -Wunderspecs
-DEPS_PLT=$(PWD)/.riemann_deps_plt
 ERLANG_DIALYZER_APPS = asn1 \
                        compiler \
                        crypto \
-                       edoc \
-                       edoc \
                        erts \
-                       eunit \
-                       eunit \
-                       gs \
-                       hipe \
                        inets \
                        kernel \
                        mnesia \
-                       mnesia \
-                       observer \
                        public_key \
                        runtime_tools \
-                       runtime_tools \
+                       sasl \
                        ssl \
                        stdlib \
                        syntax_tools \
-                       syntax_tools \
-                       tools \
-                       webtool \
                        xmerl
 
-~/.dialyzer_plt:
-	@echo "ERROR: Missing ~/.dialyzer_plt. Please wait while a new PLT is compiled"
-	@dialyzer --build_plt --apps $(ERLANG_DIALYZER_APPS)
-	@echo "now try your build again"
+RELEASE_SYSTEM = `uname -s`
+
+all: compile eunit ct dialyzer
+
+# Clean ebin and .eunit of this project
+clean:
+	@./rebar clean skip_deps=true
+
+# Clean this project and all deps
+allclean:
+	@./rebar clean
+
+compile: $(DEPS) patch
+	@./rebar compile
+
+$(DEPS):
+	@./rebar get-deps
+
+# Full clean and removal of all deps. Remove deps first to avoid
+# wasted effort of cleaning deps before nuking them.
+distclean:
+	@rm -rf deps $(DEPS_PLT)
+	@./rebar clean
+
+eunit:
+	@./rebar skip_deps=true eunit -r
+
+ct:
+	@./rebar skip_deps=true ct -r
+
+test: eunit ct
+
+# Only include local PLT if we have deps that we are going to analyze
+ifeq ($(strip $(DIALYZER_DEPS)),)
+dialyzer: ~/.dialyzer_plt
+	@dialyzer $(DIALYZER_OPTS) -r ebin
+else
+dialyzer: ~/.dialyzer_plt $(DEPS_PLT)
+	@dialyzer $(DIALYZER_OPTS) --plts ~/.dialyzer_plt $(DEPS_PLT) -r ebin
 
 $(DEPS_PLT):
-	@dialyzer --output_plt $(DEPS_PLT) --build_plt -r deps 
+	@dialyzer --build_plt $(DIALYZER_DEPS) --output_plt $(DEPS_PLT)
+endif
 
-dialyzer: $(DEPS_PLT) ~/.dialyzer_plt
-	@dialyzer $(DIALYZER_OPTS) $(DIALYZER_OPTS) --plts ~/.dialyzer_plt $(DEPS_PLT) -I deps --src src
+~/.dialyzer_plt:
+	@echo "ERROR: Missing ~/.dialyzer_plt. Please wait while a new PLT is compiled."
+	dialyzer --build_plt --apps $(ERLANG_DIALYZER_APPS)
+	@echo "now try your build again"
+
+# Generate documentation
+doc:
+	@./rebar doc skip_deps=true
+
+.PHONY: all compile eunit ct test dialyzer clean allclean distclean doc
